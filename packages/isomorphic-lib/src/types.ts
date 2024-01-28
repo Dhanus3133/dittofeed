@@ -1182,6 +1182,8 @@ export const GetUsersRequest = Type.Object({
   direction: Type.Optional(CursorDirection),
   userIds: Type.Optional(Type.Array(Type.String())),
   workspaceId: Type.String(),
+  searchProperty: Type.Optional(Nullable(Type.String())),
+  searchSegment: Type.Optional(Nullable(Type.Boolean())),
 });
 
 export type GetUsersRequest = Static<typeof GetUsersRequest>;
@@ -1954,7 +1956,7 @@ export const EmailSmtpSuccess = Type.Object({
 export type EmailSmtpSuccess = Static<typeof EmailSmtpSuccess>;
 
 export const EmailResendSuccess = Type.Object({
-  type: Type.Literal(EmailProviderType.Resend)
+  type: Type.Literal(EmailProviderType.Resend),
 });
 
 export type EmailResendSuccess = Static<typeof EmailResendSuccess>;

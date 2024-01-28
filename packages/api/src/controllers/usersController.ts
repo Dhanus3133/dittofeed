@@ -30,6 +30,8 @@ export default async function usersController(fastify: FastifyInstance) {
         cursor: request.query.cursor,
         direction: request.query.direction,
         segmentId: request.query.segmentId,
+        searchProperty: "max@email.com", // request.query.search_property,
+        searchSegment: false, // request.query.search_segment,
       });
       if (result.isErr()) {
         return reply.status(400).send({
@@ -37,12 +39,13 @@ export default async function usersController(fastify: FastifyInstance) {
         });
       }
       const { users, nextCursor, previousCursor } = result.value;
+      // console.log("USERS ARE ", users);
       return reply.status(200).send({
         users,
         nextCursor,
         previousCursor,
       });
-    },
+    }
   );
 
   fastify.withTypeProvider<TypeBoxTypeProvider>().delete(
@@ -61,6 +64,6 @@ export default async function usersController(fastify: FastifyInstance) {
     async (request, reply) => {
       await deleteUsers(request.body);
       return reply.status(204).send();
-    },
+    }
   );
 }

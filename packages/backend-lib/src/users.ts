@@ -30,6 +30,10 @@ const UsersQueryItem = Type.Object({
   computedPropertyId: Type.String(),
 });
 
+interface ClickHouseQueryRow {
+  user_id: string;
+}
+
 const UsersQueryResult = Type.Array(UsersQueryItem);
 
 enum CursorKey {
@@ -112,6 +116,41 @@ function buildUserIdQueries({
   return userIdQueries;
 }
 
+async function buildSearchUserIdQueriesClickHouse({
+  workspaceId,
+  propertyValue,
+  segmentValue,
+}: {
+  workspaceId: string;
+  propertyValue?: string | null;
+  segmentValue?: Boolean | null;
+}): Promise<String[]> {
+  const qb = new ClickHouseQueryBuilder();
+  let query = `
+    SELECT user_id
+    FROM computed_property_assignments_v2
+    WHERE workspace_id = '${workspaceId}'`;
+
+  if (propertyValue) {
+    query += ` AND user_property_value = '${propertyValue}'`;
+  }
+  if (segmentValue !== undefined) {
+    query += ` AND segment_value = ${segmentValue}`;
+  }
+
+  const result = (await (
+    await clickhouseClient().query({
+      query,
+      query_params: qb.getQueries(),
+    })
+  ).json()) as unknown as {
+    data: ClickHouseQueryRow[];
+  };
+  console.log("RESULT IS ", result);
+  const userIds: String[] = result.data.map((row) => row.user_id);
+  return userIds;
+}
+
 export async function getUsers({
   workspaceId,
   cursor: unparsedCursor,
@@ -119,6 +158,8 @@ export async function getUsers({
   direction = CursorDirectionEnum.After,
   userIds,
   limit = 10,
+  searchProperty = null,
+  searchSegment = null,
 }: GetUsersRequest & { workspaceId: string }): Promise<
   Result<GetUsersResponse, Error>
 > {
@@ -135,26 +176,78 @@ export async function getUsers({
         {
           err: e,
         },
-        "failed to decode user cursor",
+        "failed to decode user cursor"
       );
     }
   }
 
-  const userIdQueries = buildUserIdQueries({
-    workspaceId,
-    userIds,
-    cursor,
-    segmentId,
-    direction,
-  });
+  const isSearch = searchProperty !== null || searchSegment !== null;
+
+  // try {
+  //   // Define the query to fetch data from the table
+  //   const querynew = `
+  //           SELECT *
+  //           FROM computed_property_assignments_v2
+  //           LIMIT 10;
+  //       `;
+  //   const qb = new ClickHouseQueryBuilder();
+  //
+  //   // Execute the query using clickhouseClient
+  //   const response = await (
+  //     await clickhouseClient().query({
+  //       query: querynew,
+  //       query_params: qb.getQueries(),
+  //     })
+  //   ).json();
+  //
+  //   // Return the results
+  //   // console.log("============================");
+  //   // console.log(response);
+  //   // console.log("============================");
+  // } catch (error) {
+  //   console.error("Error fetching data:", error);
+  //   throw error; // or handle the error as needed
+  // }
+
+  let userIdQueries: Sql | null = null;
+  let userIdQueriesClickHouse: String[] | null = null;
+  if (isSearch) {
+    userIdQueriesClickHouse = await buildSearchUserIdQueriesClickHouse({
+      workspaceId,
+      propertyValue: searchProperty,
+      segmentValue: searchSegment,
+    });
+  } else {
+    userIdQueries = buildUserIdQueries({
+      workspaceId,
+      userIds,
+      cursor,
+      segmentId,
+      direction,
+    });
+  }
+
+  console.log("------------------------========================------------");
+  console.log("USER ID QUERIES");
+  console.log(userIdQueries);
+  console.log("------------------------========================------------");
+
+  console.log("=========");
+  console.log("USER ID QUERIES clickhouse");
+  console.log(userIdQueriesClickHouse);
+  console.log("======");
 
   const query = Prisma.sql`
-      WITH unique_user_ids AS (
+      ${
+        !isSearch
+          ? `WITH unique_user_ids AS (
           SELECT DISTINCT "userId"
           FROM (${userIdQueries}) AS all_user_ids
           ORDER BY "userId"
           LIMIT ${limit}
-      )
+      )`
+          : Prisma.empty
+      }
 
       SELECT 
         cr."userId",
@@ -175,7 +268,11 @@ export async function getUsers({
           JOIN "UserProperty" AS up ON up.id = "userPropertyId"
           WHERE
               upa."workspaceId" = CAST(${workspaceId} AS UUID)
-              AND "userId" IN (SELECT "userId" FROM unique_user_ids)
+              AND "userId" IN (${
+                isSearch
+                  ? Prisma.join(userIdQueriesClickHouse || [])
+                  : 'SELECT "userId" FROM unique_user_ids'
+              })
               AND "value" != ''
               AND "value" != '""'
               AND up."resourceType" != 'Internal'
@@ -193,12 +290,21 @@ export async function getUsers({
           JOIN "Segment" AS s ON s.id = sa."segmentId"
           WHERE
               sa."workspaceId" = CAST(${workspaceId} AS UUID)
-              AND "userId" IN (SELECT "userId" FROM unique_user_ids)
+              AND "userId" IN (${
+                isSearch
+                  ? Prisma.join(userIdQueriesClickHouse || [])
+                  : 'SELECT "userId" FROM unique_user_ids'
+              })
               AND s."resourceType" != 'Internal'
               AND "inSegment" = TRUE
       ) AS cr
       ORDER BY "userId" ASC;
     `;
+
+  console.log("------------------------========================------------");
+  console.log("QUERY");
+  console.log(query);
+  console.log("------------------------========================------------");
 
   const [results, userProperties] = await Promise.all([
     prisma().$queryRaw(query),
@@ -213,7 +319,7 @@ export async function getUsers({
       acc.set(property.id, property);
       return acc;
     },
-    new Map(),
+    new Map()
   );
 
   const userMap = new Map<string, GetUsersResponseItem>();
@@ -237,7 +343,7 @@ export async function getUsers({
       }
       const parsedUp = parseUserProperty(
         userProperty.definition as UserPropertyDefinition,
-        result.userPropertyValue,
+        result.userPropertyValue
       );
       if (parsedUp.isErr()) {
         logger().error(
@@ -246,7 +352,7 @@ export async function getUsers({
             userPropertyId: userProperty.id,
             userPropertyValue: result.userPropertyValue,
           },
-          "failed to parse user property value",
+          "failed to parse user property value"
         );
         continue;
       }
@@ -305,7 +411,7 @@ export async function deleteUsers({
   const query = `
     ALTER TABLE user_events_v2 DELETE WHERE workspace_id = ${qb.addQueryValue(
       workspaceId,
-      "String",
+      "String"
     )} AND user_id IN (${qb.addQueryValue(userIds, "Array(String)")});
   `;
   await clickhouseClient().command({

@@ -123,6 +123,9 @@ export async function createUserEventsTables({
           user_property_value String,
           max_event_time DateTime64(3),
           assigned_at DateTime64(3) DEFAULT now64(3),
+
+         INDEX segment_value_idx segment_value TYPE minmax GRANULARITY 4,
+         INDEX user_property_value_idx user_property_value TYPE minmax GRANULARITY 4,
         )
         ENGINE = ReplacingMergeTree()
         ORDER BY (
@@ -206,8 +209,8 @@ export async function createUserEventsTables({
       clickhouseClient().exec({
         query,
         clickhouse_settings: { wait_end_of_query: 1 },
-      }),
-    ),
+      })
+    )
   );
 
   const mvQueries: string[] = [
@@ -260,7 +263,7 @@ export async function createUserEventsTables({
       clickhouseClient().exec({
         query,
         clickhouse_settings: { wait_end_of_query: 1 },
-      }),
-    ),
+      })
+    )
   );
 }
